@@ -162,6 +162,43 @@ def disk_write_speed_measurement(filenum=1, filesize=64, duration=1):
 
     return throughput, iops
 
+def disk_write_speed_measurement2(filename, filesize=64, loop=100):
+    disks = psutil.disk_io_counters(perdisk=True)
+    target_disk = disks[DISK]
+    read_bytes = target_disk.read_bytes
+    write_bytes = target_disk.write_bytes
+
+    out = "hddstats.csv"
+    if not os.path.exists(out):
+        logging = open(out,"w+")
+        logging.write("Date, Time, Written MB, Read MB, Writen Total MB, Read Total MB" + "\n")
+        logging.close
+    logging = open(out,"a+")
+
+    ts = datetime.datetime.fromtimestamp(time.time()).strftime('%d.%m.%Y,%H:%M:%S')
+    start = now()
+    for _ in range(loop):
+        try:
+            generate_random_binary_file(filename, filesize)
+        except Exception as e:
+            print("Fail to generate load, err = {}".format(e))
+            sys.exit(0)
+
+    diff = now() - start
+    throughput = loop * filesize/(diff * 1024)
+    iops = loop / diff # = throughput * 1024 / filesize
+
+    disks = psutil.disk_io_counters(perdisk=True)
+    target_disk = disks[DISK]
+    writebcy = target_disk.write_bytes - write_bytes
+    write_bytes = target_disk.write_bytes
+    readbcy = target_disk.read_bytes - read_bytes
+    read_bytes = target_disk.read_bytes
+    logging.write(ts + "," + str(writebcy/1048576) + "," + str(readbcy/1048576) + "," + str(write_bytes/1048576) + "," + str(read_bytes/1048576) + "\n")       
+    logging.close
+
+    return throughput, iops
+
 def disk_read_speed_measurement(filenum=1, filesize=64, duration=1):
     bloack_size = 64
     filename = generate_random_filename2()
@@ -178,26 +215,54 @@ def disk_read_speed_measurement(filenum=1, filesize=64, duration=1):
         buff = os.read(f, bloack_size)  # read from position
         if not buff: break  # if EOF reached
 
-    print(blocks_num)
+    # print(blocks_num)
     diff = (now() - start) + 0.1
     throughput = filesize / (diff * 1024)
-    iops = throughput / bloack_size # = throughput * 1024 / filesize
+    iops = throughput / filesize # = throughput * 1024 / filesize
 
     os.close(f)
     os.remove(filename)
     return throughput, iops
 
-def test():
+def disk_read_speed_measurement2(filename, bloack_size=64, loop=100):
+    filesize = os.stat(filename).st_size // 1024 # in KB
+    start = now()
+    for _ in range(loop):
+        f = os.open(filename, os.O_RDONLY, 0o777)  # low-level I/O
+        # generate random read positions
+        offsets = list(range(0, filesize, bloack_size)) # in KB
+        random.shuffle(offsets)
+        for blocks_num, offset in enumerate(offsets, 1):
+            os.lseek(f, offset, os.SEEK_SET)  # set position
+            buff = os.read(f, bloack_size)  # read from position
+            if not buff:
+                break  # if EOF reached
+        os.close(f)
+        # time.sleep(1)
+    diff = now() - start
+    throughput = loop * filesize / (diff * 1024)
+    iops = loop / diff # = throughput * 1024 / filesize
+    os.remove(filename)
+    return throughput, iops
+
+def disk_speed_measurement(filesize):
     filenum = 1
-    duration = 5
-    for filesize in test_load[:]:
-        print("start testing with fileaize = {} filenum = {} duration = {}".format(filesize, filenum, duration))
-        throughput, iops = disk_write_speed_measurement(filenum=filenum, filesize=filesize, duration=duration)
-        print("Disk writing speed: {0:.2f} Mbytes per second".format(throughput))
-        print("Disk iops: {0:.2f} bytes per second".format(iops))
-        throughput, iops = disk_read_speed_measurement(filenum=filenum, filesize=filesize, duration=duration)
-        print("Disk reading speed: {0:.2f} Mbytes per second".format(throughput))
-        print("Disk iops: {0:.2f} bytes per second".format(iops))
+    loop = 100
+    bloack_size = 64
+    filename = generate_random_filename2()
+    print("start write testing with fileaize = {} filename = {} loop = {}".format(filesize, filename, loop))
+    throughput, iops = disk_write_speed_measurement2(filename=filename, filesize=filesize, loop=loop)
+    print("Disk writing speed: {0:.2f} Mbytes per second".format(throughput))
+    print("Disk iops: {0:.2f} bytes per second".format(iops))
+
+    print("start read testing with fileaize = {} filename = {} loop = {}".format(filesize, filename, loop))
+    throughput, iops = disk_read_speed_measurement2(filename=filename, bloack_size=bloack_size, loop=loop)
+    print("Disk reading speed: {0:.2f} Mbytes per second".format(throughput))
+    print("Disk iops: {0:.2f} bytes per second".format(iops))
+    
+def test():
+    for filesize in test_load[-7:]:
+        disk_speed_measurement(filesize=filesize)
 
 if __name__ == "__main__":
     test()
