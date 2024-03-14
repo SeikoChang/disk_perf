@@ -173,87 +173,120 @@ def disk_read_speed_measurement(filename, filesize, block_size=64, duration=10, 
 
     return throughput, iops
 
-def disk_speed_measurement(filesize, block_size=64, loop=5, duration=5, output="hddstats.csv"):
-    throughput_write, iops_write = [], []
-    throughput_read, iops_read = [], []
+def disk_speed_measurement(filesize, block_size=64, loop=5, duration=5, output="hdd_stats.csv", summary="hdd_summary.csv"):
     avg = lambda lst : round(sum(lst) / len(lst), 2)
+    
+    col_name = ["Filesize (KiB)", "Type", "Read MiB/sec", "Write MiB/sec", "reads/sec", "writes/sec", "IOPS"]
+    if not os.path.exists(summary):
+        with open(summary, "w+") as _sum:
+            _sum.write(", ".join(col_name) + "\n")
 
-    disks = psutil.disk_io_counters(perdisk=True)
-    target_disk = disks[DISK]
-    read_bytes = target_disk.read_bytes
-    write_bytes = target_disk.write_bytes
-
+    col_name = ["Date", "Time", "Filesize (KiB)", "Type", "Read MiB/sec", "Write MiB/sec", "reads/sec", "writes/sec", "IOPS", "Read MiB/sec", "Write MiB/sec", "reads/sec", "writes/sec", "IOPS" ]
     if not os.path.exists(output):
-        logging = open(output, "w+")
-        logging.write("Date, Time, Written MB, Read MB, Writen Total MB, Read Total MB" + "\n")
-        logging.close
+        with open(output, "w+") as out:
+            out.write(", ".join(col_name) + "\n")
 
+    throughput_writes, iops_writes = [], []
+    throughput_reads, iops_reads = [], []
     for i in range(loop):
         print('{0}_{1}/{2}_{0}'.format('=' * 32, i + 1, loop))
         filename = generate_random_filename2()
-        ts = datetime.datetime.fromtimestamp(time.time()).strftime('%d.%m.%Y,%H:%M:%S')
-
-        print("start sequential write testing with fileaize = {} KB, filename = {} block_size = {} duration = {}".format(filesize, filename, block_size, duration))
-        throughput, iops = disk_write_speed_measurement(filename=filename, filesize=filesize, block_size=block_size, duration=duration, sequential=True)
-        throughput_write.append(throughput), iops_write.append(iops)
-
-        print("start sequential read testing with fileaize = {} KB, filename = {} block_size = {} duration = {}".format(filesize, filename, block_size, duration))
-        throughput, iops = disk_read_speed_measurement(filename=filename, filesize=filesize, block_size=block_size, duration=duration, sequential=True)
-        throughput_read.append(throughput), iops_read.append(iops)
 
         disks = psutil.disk_io_counters(perdisk=True)
         target_disk = disks[DISK]
-        write_bytes_now = target_disk.write_bytes
-        read_bytes_now = target_disk.read_bytes
-        writebcy = write_bytes_now - write_bytes
-        readbcy = read_bytes_now - read_bytes
-        write_bytes = write_bytes_now
-        read_bytes = read_bytes_now
-        logging = open(output, "a+")
-        logging.write(ts + "," + str(writebcy/1048576) + "," + str(readbcy/1048576) + "," + str(write_bytes_now/1048576) + "," + str(read_bytes_now/1048576) + "\n")
-        logging.close
+        write_bytes = target_disk.write_bytes
+        read_bytes = target_disk.read_bytes
+        read_count = target_disk.read_count
+        write_count = target_disk.write_count
+
+        ts = datetime.datetime.fromtimestamp(time.time()).strftime('%d.%m.%Y, %H:%M:%S')
+        start = now()
+    
+        print("start sequential write testing with fileaize = {} KB, filename = {}, block_size = {} KB, duration = {} secs".format(filesize, filename, block_size, duration))
+        throughput_write, iops_write = disk_write_speed_measurement(filename=filename, filesize=filesize, block_size=block_size, duration=duration, sequential=True)
+        throughput_writes.append(throughput_write), iops_writes.append(iops_write)
+        throughput_write, iops_write = round(throughput_write, 2), round(iops_write, 2)
+
+        print("start sequential read testing with fileaize = {} KB, filename = {}, block_size = {} KB, duration = {} secs".format(filesize, filename, block_size, duration))
+        throughput_read, iops_read = disk_read_speed_measurement(filename=filename, filesize=filesize, block_size=block_size, duration=duration, sequential=True)
+        throughput_reads.append(throughput_read), iops_reads.append(iops_read)
+        throughput_read, iops_read = round(throughput_read, 2), round(iops_read, 2)
+
+        diff = now() - start
+        disks = psutil.disk_io_counters(perdisk=True)
+        target_disk = disks[DISK]
+        write_speed = round((target_disk.write_bytes - write_bytes) / (diff * 1024 * 1024), 2)
+        readb_speed = round((target_disk.read_bytes - read_bytes) / (diff * 1024 * 1024), 2)
+        write_iops = round((target_disk.write_count - write_count) / diff, 2)
+        read_iops = round((target_disk.read_count - read_count) / diff, 2)
+    
+        data = [ts, filesize, "sequential", throughput_read, throughput_write, iops_read, iops_write, iops_read + iops_write, readb_speed, write_speed, read_iops, write_iops, round(read_iops + write_iops, 2)]
+        with open(output, "a+") as out:
+            out.write(", ".join(map(str, data)) + "\n")
 
         os.remove(filename)
 
+    avg_throughput_reads, avg_throughput_writes, avg_iops_reads, avg_iops_writes = avg(throughput_reads), avg(throughput_writes), avg(iops_reads), avg(iops_writes)
+    data = [filesize, "sequential", avg_throughput_reads, avg_throughput_writes, avg_iops_reads, avg_iops_writes, round(avg_iops_reads + avg_iops_writes, 2)]
+    with open(summary, "a+") as _sum:
+        _sum.write(", ".join(map(str, data)) + "\n")
     print('{0}_{1}/{2}_{0}\n'.format('=' * 32, i + 1, loop))
-    print("Disk sequential writing speed: {0:.2f} MiB per second ({1:.4f} MB)".format(avg(throughput_write), filesize / 1024))
-    print("Disk iops: {0:.2f} per second".format(avg(iops_write)))
-    print("Disk sequential reading speed: {0:.2f} MiB per second ({1:.4f} MB)".format(avg(throughput_read), filesize / 1024))
-    print("Disk iops: {0:.2f} per second".format(avg(iops_read)))
+    print("Disk sequential writing speed: {0:.2f} MiB per second ({1:.4f} MB)".format(avg_throughput_writes, filesize / 1024))
+    print("Disk iops: {0:.2f} per second".format(avg_iops_writes))
+    print("Disk sequential reading speed: {0:.2f} MiB per second ({1:.4f} MB)".format(avg_throughput_reads, filesize / 1024))
+    print("Disk iops: {0:.2f} per second".format(avg_iops_reads))
     print("\n")
 
+    throughput_writes, iops_writes = [], []
+    throughput_reads, iops_reads = [], []
     for i in range(loop):
         print('{0}_{1}/{2}_{0}'.format('=' * 32, i + 1, loop))
         filename = generate_random_filename2()
-        ts = datetime.datetime.fromtimestamp(time.time()).strftime('%d.%m.%Y,%H:%M:%S')
-
-        print("start random write testing with fileaize = {} KB, filename = {} block_size = {} duration = {}".format(filesize, filename, block_size, duration))
-        throughput, iops = disk_write_speed_measurement(filename=filename, filesize=filesize, block_size=block_size, duration=duration, sequential=False)
-        throughput_write.append(throughput), iops_write.append(iops)
-
-        print("start random read testing with fileaize = {} KB, filename = {} block_size = {} duration = {}".format(filesize, filename, block_size, duration))
-        throughput, iops = disk_read_speed_measurement(filename=filename, filesize=filesize, block_size=block_size, duration=duration, sequential=False)
-        throughput_read.append(throughput), iops_read.append(iops)
 
         disks = psutil.disk_io_counters(perdisk=True)
         target_disk = disks[DISK]
-        write_bytes_now = target_disk.write_bytes
-        read_bytes_now = target_disk.read_bytes
-        writebcy = write_bytes_now - write_bytes
-        readbcy = read_bytes_now - read_bytes
-        write_bytes = write_bytes_now
-        read_bytes = read_bytes_now
-        logging = open(output, "a+")
-        logging.write(ts + "," + str(writebcy/1048576) + "," + str(readbcy/1048576) + "," + str(write_bytes_now/1048576) + "," + str(read_bytes_now/1048576) + "\n")
-        logging.close
+        write_bytes = target_disk.write_bytes
+        read_bytes = target_disk.read_bytes
+        read_count = target_disk.read_count
+        write_count = target_disk.write_count
+
+        ts = datetime.datetime.fromtimestamp(time.time()).strftime('%d.%m.%Y, %H:%M:%S')
+        start = now()
+
+        print("start random write testing with fileaize = {} KB, filename = {}, block_size = {} KB, duration = {} secs".format(filesize, filename, block_size, duration))
+        throughput_write, iops_write = disk_write_speed_measurement(filename=filename, filesize=filesize, block_size=block_size, duration=duration, sequential=False)
+        throughput_writes.append(throughput_write), iops_writes.append(iops_write)
+        throughput_write, iops_write = round(throughput_write, 2), round(iops_write, 2)
+
+        print("start random read testing with fileaize = {} KB, filename = {}, block_size = {} KB, duration = {} secs".format(filesize, filename, block_size, duration))
+        throughput_read, iops_read = disk_read_speed_measurement(filename=filename, filesize=filesize, block_size=block_size, duration=duration, sequential=False)
+        throughput_reads.append(throughput_read), iops_reads.append(iops_read)
+        throughput_read, iops_read = round(throughput_read, 2), round(iops_read, 2)
+
+
+        diff = now() - start
+        disks = psutil.disk_io_counters(perdisk=True)
+        target_disk = disks[DISK]
+        write_speed = round((target_disk.write_bytes - write_bytes) / (diff * 1024 * 1024), 2)
+        readb_speed = round((target_disk.read_bytes - read_bytes) / (diff * 1024 * 1024), 2)
+        write_iops = round((target_disk.write_count - write_count) / diff, 2)
+        read_iops = round((target_disk.read_count - read_count) / diff, 2)
+    
+        data = [ts, filesize, "random", throughput_read, throughput_write, iops_read, iops_write, iops_read + iops_write, readb_speed, write_speed, read_iops, write_iops, round(read_iops + write_iops, 2)]
+        with open(output, "a+") as out:
+            out.write(", ".join(map(str, data)) + "\n")
 
         os.remove(filename)
 
+    avg_throughput_reads, avg_throughput_writes, avg_iops_reads, avg_iops_writes = avg(throughput_reads), avg(throughput_writes), avg(iops_reads), avg(iops_writes)
+    data = [filesize, "random", avg_throughput_reads, avg_throughput_writes, avg_iops_reads, avg_iops_writes, round(avg_iops_reads + avg_iops_writes, 2)]
+    with open(summary, "a+") as _sum:
+        _sum.write(", ".join(map(str, data)) + "\n")
     print('{0}_{1}/{2}_{0}\n'.format('=' * 32, i + 1, loop))
-    print("Disk random writing speed: {0:.2f} MiB per second ({1:.4f} MB)".format(avg(throughput_write), filesize / 1024))
-    print("Disk iops: {0:.2f} per second".format(avg(iops_write)))
-    print("Disk random reading speed: {0:.2f} MiB per second ({1:.4f} MB)".format(avg(throughput_read), filesize / 1024))
-    print("Disk iops: {0:.2f} per second".format(avg(iops_read)))
+    print("Disk random writing speed: {0:.2f} MiB per second ({1:.4f} MB)".format(avg_throughput_writes, filesize / 1024))
+    print("Disk iops: {0:.2f} per second".format(avg_iops_writes))
+    print("Disk random reading speed: {0:.2f} MiB per second ({1:.4f} MB)".format(avg_throughput_reads, filesize / 1024))
+    print("Disk iops: {0:.2f} per second".format(avg_iops_reads))
     print("\n")
 
 def test():
